@@ -8,13 +8,21 @@ import base64
 @st.cache_resource
 def load_pipeline():
     # Load the pipeline from the single file
-    with open('full_pipeline.pkl', 'rb') as pipeline_file:
-        pipeline = pickle.load(pipeline_file)
+    try:
+        with open('full_pipeline.pkl', 'rb') as pipeline_file:
+            pipeline = pickle.load(pipeline_file)
 
-    model = pipeline['model']
-    scaler = pipeline['scaler']
+        model = pipeline['model']
+        scaler = pipeline['scaler']
 
-    return model, scaler
+        return model, scaler
+    except FileNotFoundError:
+        st.error("File model tidak ditemukan. Pastikan 'model_deployment/full_pipeline.pkl' ada di direktori yang benar.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Terjadi kesalahan saat memuat model: {e}")
+        st.stop()
+
 
 model, scaler = load_pipeline()
 
@@ -84,31 +92,45 @@ input_df = pd.DataFrame([input_data])
 skewed_features = ['song_duration_ms', 'acousticness', 'instrumentalness', 'liveness', 'speechiness', 'tempo']
 for feature in skewed_features:
     if feature in input_df.columns:
-        input_df[feature] = np.log1p(input_df[feature]) # log1p handles 0 values
+        # Add a small value before log transformation if the value is 0
+        input_df[feature] = input_df[feature].apply(lambda x: np.log1p(x) if x > 0 else 0)
+
 
 # Apply One-Hot Encoding to categorical features
 # Need to ensure all possible columns from training are present, fill with 0 if not
-# Note: scaler.feature_names_in_ holds the column names AFTER encoding and scaling from training data
-encoded_cols_train = scaler.feature_names_in_
+# Note: scaler.feature_names_in_ holds the column names AFTER encoding and BEFORE scaling from training data
+# We need to get the expected column names AFTER encoding *but before scaling*
+# A robust way is to create a dummy dataframe with all possible categorical values
+# or, if the scaler has feature_names_in_ attribute, use that directly as it should represent
+# the features the scaler was fit on (which includes encoded categorical features)
+
+# Let's use scaler.feature_names_in_ to get the expected feature names after encoding and before scaling
+expected_feature_names = list(scaler.feature_names_in_) # This contains all feature names the scaler was fit on
+
+# Apply one-hot encoding to the input data
 input_df_encoded = pd.get_dummies(input_df, columns=categorical_features, drop_first=True)
 
-# Align columns with the training data - add missing columns and fill with 0
-missing_cols = set(encoded_cols_train) - set(input_df_encoded.columns)
-for c in missing_cols:
-    input_df_encoded[c] = 0
-# Ensure the order of columns is the same as during training
-input_df_encoded = input_df_encoded[encoded_cols_train]
+# Reindex the encoded input DataFrame to match the expected feature names.
+# Fill missing columns with 0.
+input_df_encoded = input_df_encoded.reindex(columns=expected_feature_names, fill_value=0)
 
 
 # Apply Standard Scaling to numerical features
-# Select only the numerical columns before scaling
-numerical_cols_input = input_df_encoded[numerical_features_for_scaling].columns
-input_df_encoded[numerical_cols_input] = scaler.transform(input_df_encoded[numerical_cols_input])
+# We need to identify which of the expected_feature_names are numerical features that were scaled
+# We can use the original list of numerical_features_for_scaling
+numerical_cols_to_scale_in_encoded = [col for col in expected_feature_names if col in numerical_features_for_scaling]
+
+# Apply scaling to these identified numerical columns
+# Ensure the order matches
+input_df_encoded[numerical_cols_to_scale_in_encoded] = scaler.transform(input_df_encoded[numerical_cols_to_scale_in_encoded])
 
 
 # Make prediction
 if st.button("Prediksi Popularitas"):
-    prediction = model.predict(input_df_encoded)
+    # Ensure the columns are in the exact order expected by the model
+    # The scaler's feature_names_in_ should provide this order
+    final_input_for_prediction = input_df_encoded[expected_feature_names]
+    prediction = model.predict(final_input_for_prediction)
     st.subheader(f"Prediksi Popularitas Lagu: {prediction[0]:.2f}")
 
 st.markdown("---")
