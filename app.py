@@ -9,7 +9,7 @@ import pickle
 @st.cache_resource
 def load_bundle():
     try:
-        with open('model_deployment/full_pipeline.pkl', 'rb') as f:
+        with open('full_pipeline.pkl', 'rb') as f:
             bundle = pickle.load(f)
         model = bundle.get('model')
         scaler = bundle.get('scaler')
