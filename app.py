@@ -2,80 +2,80 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-import base64
 
-# Function to load the combined pipeline (model and scaler)
+# ======================
+# Load model & metadata
+# ======================
 @st.cache_resource
-def load_pipeline():
-    # Load the pipeline from the single file
+def load_bundle():
     try:
-        with open('full_pipeline.pkl', 'rb') as pipeline_file:
-            pipeline = pickle.load(pipeline_file)
+        with open('model_deployment/full_pipeline.pkl', 'rb') as f:
+            bundle = pickle.load(f)
+        model = bundle.get('model')
+        scaler = bundle.get('scaler')
 
-        model = pipeline['model']
-        scaler = pipeline['scaler']
-
-        # Get the feature names the scaler was fit on. This is the expected order and names
-        # for the input data after all preprocessing steps (log transform, one-hot encoding, but BEFORE scaling)
-        # Let's store this list as it's crucial for alignment
-        expected_feature_names_before_scaling = list(scaler.feature_names_in_)
-
-
-        return model, scaler, expected_feature_names_before_scaling
+        # Cari daftar kolom fitur yang dipakai saat training
+        feature_columns = bundle.get('feature_columns')
+        if feature_columns is None:
+            # fallback: coba dari scaler atau model (harusnya ada kalau fit pakai DataFrame)
+            if scaler is not None and hasattr(scaler, 'feature_names_in_'):
+                feature_columns = list(scaler.feature_names_in_)
+            elif model is not None and hasattr(model, 'feature_names_in_'):
+                feature_columns = list(model.feature_names_in_)
+            else:
+                raise ValueError(
+                    "Daftar kolom fitur tidak ditemukan. "
+                    "Simpan X_train.columns ke 'feature_columns' saat training."
+                )
+        return model, scaler, feature_columns
     except FileNotFoundError:
-        st.error("File model tidak ditemukan. Pastikan 'model_deployment/full_pipeline.pkl' ada di direktori yang benar.")
+        st.error("File model tidak ditemukan. Pastikan 'model_deployment/full_pipeline.pkl' ada di repo.")
         st.stop()
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memuat model: {e}")
         st.stop()
 
+model, scaler, expected_cols = load_bundle()
 
-model, scaler, expected_feature_names_before_scaling = load_pipeline()
-
-# Define the list of numerical features for scaling
-# Ensure these match the ones used during training
-numerical_features_for_scaling = ['song_duration_ms', 'acousticness', 'danceability', 'energy',
-                                'instrumentalness', 'liveness', 'loudness', 'speechiness', 'tempo',
-                                'audio_valence']
-
-# Define the list of categorical features for one-hot encoding
-# Ensure these match the ones used during training
+# ======================
+# Konfigurasi fitur
+# ======================
+numerical_features_for_log = [
+    'song_duration_ms', 'acousticness', 'instrumentalness',
+    'liveness', 'speechiness', 'tempo'
+]
 categorical_features = ['audio_mode', 'key', 'time_signature']
 
-# Streamlit App Title
+# ======================
+# UI
+# ======================
 st.title("Prediksi Popularitas Lagu")
-
 st.markdown("""
-Aplikasi ini memprediksi popularitas lagu berdasarkan fitur-fitur audio.
-Mohon masukkan nilai untuk setiap fitur di bawah ini.
+Aplikasi ini memprediksi popularitas lagu berdasarkan fitur audio.
+Masukkan nilai fitur di bawah ini.
 """)
 
-# Input features from the user
-st.header("Masukkan Fitur Lagu")
-
-# Using columns for better layout
 col1, col2, col3 = st.columns(3)
-
 with col1:
     song_duration_ms = st.number_input("Song Duration (ms)", min_value=0.0, value=200000.0)
-    acousticness = st.slider("Acousticness", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
-    danceability = st.slider("Danceability", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
-    energy = st.slider("Energy", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
-    instrumentalness = st.slider("Instrumentalness", min_value=0.0, max_value=1.0, value=0.0, step=0.0001)
+    acousticness = st.slider("Acousticness", 0.0, 1.0, 0.5, 0.01)
+    danceability = st.slider("Danceability", 0.0, 1.0, 0.5, 0.01)
+    energy = st.slider("Energy", 0.0, 1.0, 0.5, 0.01)
+    instrumentalness = st.slider("Instrumentalness", 0.0, 1.0, 0.0, 0.0001)
 
 with col2:
-    liveness = st.slider("Liveness", min_value=0.0, max_value=1.0, value=0.1, step=0.001)
-    loudness = st.slider("Loudness (dB)", min_value=-60.0, max_value=0.0, value=-10.0, step=0.1)
-    speechiness = st.slider("Speechiness", min_value=0.0, max_value=1.0, value=0.05, step=0.001)
+    liveness = st.slider("Liveness", 0.0, 1.0, 0.1, 0.001)
+    loudness = st.slider("Loudness (dB)", -60.0, 0.0, -10.0, 0.1)
+    speechiness = st.slider("Speechiness", 0.0, 1.0, 0.05, 0.001)
     tempo = st.number_input("Tempo (bpm)", min_value=0.0, value=120.0)
-    audio_valence = st.slider("Audio Valence", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
+    audio_valence = st.slider("Audio Valence", 0.0, 1.0, 0.5, 0.01)
 
 with col3:
     audio_mode = st.radio("Audio Mode", options=[0, 1], format_func=lambda x: "Minor" if x == 0 else "Major")
     key = st.selectbox("Key", options=list(range(12)))
     time_signature = st.selectbox("Time Signature", options=[0, 1, 3, 4, 5])
 
-# Create a dictionary from the input values
+# Konstruksi DataFrame input mentah
 input_data = {
     'song_duration_ms': song_duration_ms,
     'acousticness': acousticness,
@@ -91,53 +91,49 @@ input_data = {
     'key': key,
     'time_signature': time_signature
 }
-
-# Convert input data to DataFrame
 input_df = pd.DataFrame([input_data])
 
-# Apply log transformation to skewed numerical features (as done in preprocessing)
-# Need to handle potential zero values before log transform
-skewed_features = ['song_duration_ms', 'acousticness', 'instrumentalness', 'liveness', 'speechiness', 'tempo']
-for feature in skewed_features:
-    if feature in input_df.columns:
-        # Add a small value before log transformation if the value is 0
-        input_df[feature] = input_df[feature].apply(lambda x: np.log1p(x) if x > 0 else 0)
+# ======================
+# Preprocessing konsisten
+# ======================
 
+# 1) Log1p untuk fitur skewed (sesuai training)
+for f in numerical_features_for_log:
+    if f in input_df.columns:
+        # log1p(0) aman = 0; jika negatif jangan dilog
+        input_df[f] = input_df[f].apply(lambda x: np.log1p(x) if x >= 0 else x)
 
-# --- Start of Modified One-Hot Encoding and Column Alignment ---
-
-# Apply One-Hot Encoding to the input data
-# Use get_dummies on the categorical columns
-# We do NOT use drop_first=True here initially, as we will handle the dropping/alignment
-# based on the expected columns from training data
+# 2) One-hot encoding untuk kategori
 input_df_encoded = pd.get_dummies(input_df, columns=categorical_features, drop_first=False)
 
+# 3) Align kolom ke expected_cols (tambahkan yang hilang = 0; buang yang ekstra)
+X_aligned = input_df_encoded.reindex(columns=expected_cols, fill_value=0)
 
-# Now, reindex the encoded input DataFrame to match the expected feature names from training data.
-# expected_feature_names_before_scaling contains the exact list of columns (including encoded ones)
-# that the scaler was fit on, which is the structure expected by the model after encoding but before scaling.
-input_df_aligned_before_scaling = input_df_encoded.reindex(columns=expected_feature_names_before_scaling, fill_value=0)
+# 4) Scaling (jika scaler tersedia)
+# Penting: scaler di-fit pada SELURUH matriks fitur (termasuk dummies),
+# jadi di sini kita transform seluruh X_aligned, bukan subset numerik saja.
+if scaler is not None:
+    X_scaled_array = scaler.transform(X_aligned)
+    X_ready = pd.DataFrame(X_scaled_array, columns=expected_cols, index=X_aligned.index)
+else:
+    X_ready = X_aligned
 
-# --- End of Modified One-Hot Encoding and Column Alignment ---
-
-
-# Apply Standard Scaling to numerical features
-# Identify which columns in the aligned DataFrame are the numerical features that need scaling
-# We use the original list of numerical features for this
-numerical_cols_to_scale = [col for col in numerical_features_for_scaling if col in input_df_aligned_before_scaling.columns]
-
-# Apply scaling ONLY to these numerical columns in the aligned DataFrame
-# Create a copy to avoid SettingWithCopyWarning
-input_df_aligned_scaled = input_df_aligned_before_scaling.copy()
-input_df_aligned_scaled[numerical_cols_to_scale] = scaler.transform(input_df_aligned_before_scaling[numerical_cols_to_scale])
-
-
-# Make prediction
+# ======================
+# Predict
+# ======================
 if st.button("Prediksi Popularitas"):
-    # The input_df_aligned_scaled DataFrame should now have the correct columns, order, and scaling
-    # It should be ready for the model
-    prediction = model.predict(input_df_aligned_scaled)
-    st.subheader(f"Prediksi Popularitas Lagu: {prediction[0]:.2f}")
+    try:
+        pred = model.predict(X_ready)
+        st.subheader(f"Prediksi Popularitas Lagu: {pred[0]:.2f}")
+    except Exception as e:
+        # Debug helper: tampilkan mismatch jika ada
+        missing = set(expected_cols) - set(X_ready.columns)
+        extra = set(X_ready.columns) - set(expected_cols)
+        if missing:
+            st.warning(f"Missing cols: {sorted(list(missing))[:10]} ...")
+        if extra:
+            st.info(f"Extra cols: {sorted(list(extra))[:10]} ...")
+        st.error(f"Gagal melakukan prediksi: {e}")
 
 st.markdown("---")
-st.markdown("Catatan: Prediksi ini didasarkan hanya pada fitur audio yang tersedia. Faktor eksternal dapat sangat mempengaruhi popularitas lagu.")
+st.caption("Catatan: Jika model dilatih dengan pipeline yang berbeda, pertimbangkan untuk menyimpan seluruh pipeline preprocessing+model.")
