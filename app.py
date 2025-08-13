@@ -67,7 +67,7 @@ numerical_features_for_log = [
 categorical_features = ["audio_mode", "key", "time_signature"]
 
 st.title("Prediksi Popularitas Lagu")
-st.caption(f"Model: {os.path.basename(bundle_path)}")
+# st.caption(f"Model: {os.path.basename(bundle_path)}")
 
 st.markdown("""
 Aplikasi ini memprediksi popularitas lagu berdasarkan fitur-fitur audio.
