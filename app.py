@@ -9,13 +9,19 @@ import base64
 def load_pipeline():
     # Load the pipeline from the single file
     try:
-        with open('full_pipeline.pkl', 'rb') as pipeline_file:
+        with open('model_deployment/full_pipeline.pkl', 'rb') as pipeline_file:
             pipeline = pickle.load(pipeline_file)
 
         model = pipeline['model']
         scaler = pipeline['scaler']
 
-        return model, scaler
+        # Get the feature names the scaler was fit on. This is the expected order and names
+        # for the input data after all preprocessing steps (log transform, one-hot encoding, but BEFORE scaling)
+        # Let's store this list as it's crucial for alignment
+        expected_feature_names_before_scaling = list(scaler.feature_names_in_)
+
+
+        return model, scaler, expected_feature_names_before_scaling
     except FileNotFoundError:
         st.error("File model tidak ditemukan. Pastikan 'model_deployment/full_pipeline.pkl' ada di direktori yang benar.")
         st.stop()
@@ -24,14 +30,16 @@ def load_pipeline():
         st.stop()
 
 
-model, scaler = load_pipeline()
+model, scaler, expected_feature_names_before_scaling = load_pipeline()
 
 # Define the list of numerical features for scaling
+# Ensure these match the ones used during training
 numerical_features_for_scaling = ['song_duration_ms', 'acousticness', 'danceability', 'energy',
                                 'instrumentalness', 'liveness', 'loudness', 'speechiness', 'tempo',
                                 'audio_valence']
 
 # Define the list of categorical features for one-hot encoding
+# Ensure these match the ones used during training
 categorical_features = ['audio_mode', 'key', 'time_signature']
 
 # Streamlit App Title
@@ -96,41 +104,39 @@ for feature in skewed_features:
         input_df[feature] = input_df[feature].apply(lambda x: np.log1p(x) if x > 0 else 0)
 
 
-# Apply One-Hot Encoding to categorical features
-# Need to ensure all possible columns from training are present, fill with 0 if not
-# Note: scaler.feature_names_in_ holds the column names AFTER encoding and BEFORE scaling from training data
-# We need to get the expected column names AFTER encoding *but before scaling*
-# A robust way is to create a dummy dataframe with all possible categorical values
-# or, if the scaler has feature_names_in_ attribute, use that directly as it should represent
-# the features the scaler was fit on (which includes encoded categorical features)
+# --- Start of Modified One-Hot Encoding and Column Alignment ---
 
-# Let's use scaler.feature_names_in_ to get the expected feature names after encoding and before scaling
-expected_feature_names = list(scaler.feature_names_in_) # This contains all feature names the scaler was fit on
+# Apply One-Hot Encoding to the input data
+# Use get_dummies on the categorical columns
+# We do NOT use drop_first=True here initially, as we will handle the dropping/alignment
+# based on the expected columns from training data
+input_df_encoded = pd.get_dummies(input_df, columns=categorical_features, drop_first=False)
 
-# Apply one-hot encoding to the input data
-input_df_encoded = pd.get_dummies(input_df, columns=categorical_features, drop_first=True)
 
-# Reindex the encoded input DataFrame to match the expected feature names.
-# Fill missing columns with 0.
-input_df_encoded = input_df_encoded.reindex(columns=expected_feature_names, fill_value=0)
+# Now, reindex the encoded input DataFrame to match the expected feature names from training data.
+# expected_feature_names_before_scaling contains the exact list of columns (including encoded ones)
+# that the scaler was fit on, which is the structure expected by the model after encoding but before scaling.
+input_df_aligned_before_scaling = input_df_encoded.reindex(columns=expected_feature_names_before_scaling, fill_value=0)
+
+# --- End of Modified One-Hot Encoding and Column Alignment ---
 
 
 # Apply Standard Scaling to numerical features
-# We need to identify which of the expected_feature_names are numerical features that were scaled
-# We can use the original list of numerical_features_for_scaling
-numerical_cols_to_scale_in_encoded = [col for col in expected_feature_names if col in numerical_features_for_scaling]
+# Identify which columns in the aligned DataFrame are the numerical features that need scaling
+# We use the original list of numerical features for this
+numerical_cols_to_scale = [col for col in numerical_features_for_scaling if col in input_df_aligned_before_scaling.columns]
 
-# Apply scaling to these identified numerical columns
-# Ensure the order matches
-input_df_encoded[numerical_cols_to_scale_in_encoded] = scaler.transform(input_df_encoded[numerical_cols_to_scale_in_encoded])
+# Apply scaling ONLY to these numerical columns in the aligned DataFrame
+# Create a copy to avoid SettingWithCopyWarning
+input_df_aligned_scaled = input_df_aligned_before_scaling.copy()
+input_df_aligned_scaled[numerical_cols_to_scale] = scaler.transform(input_df_aligned_before_scaling[numerical_cols_to_scale])
 
 
 # Make prediction
 if st.button("Prediksi Popularitas"):
-    # Ensure the columns are in the exact order expected by the model
-    # The scaler's feature_names_in_ should provide this order
-    final_input_for_prediction = input_df_encoded[expected_feature_names]
-    prediction = model.predict(final_input_for_prediction)
+    # The input_df_aligned_scaled DataFrame should now have the correct columns, order, and scaling
+    # It should be ready for the model
+    prediction = model.predict(input_df_aligned_scaled)
     st.subheader(f"Prediksi Popularitas Lagu: {prediction[0]:.2f}")
 
 st.markdown("---")
