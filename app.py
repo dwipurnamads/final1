@@ -9,7 +9,7 @@ import base64
 def load_pipeline():
     # Load the pipeline from the single file
     try:
-        with open('model_deployment/full_pipeline.pkl', 'rb') as pipeline_file:
+        with open('full_pipeline.pkl', 'rb') as pipeline_file:
             pipeline = pickle.load(pipeline_file)
 
         model = pipeline['model']
