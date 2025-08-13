@@ -164,7 +164,7 @@ if st.button("Prediksi Popularitas"):
         st.error(f"Gagal melakukan prediksi: {e}")
 
 st.markdown("---")
-st.caption(
-    "Jika tetap error, sangat mungkin file model tidak menyertakan feature list. "
-    "Simpan ulang dari training dengan `bundle['feature_columns'] = X_train.columns.tolist()`."
-)
+#st.caption(
+#    "Jika tetap error, sangat mungkin file model tidak menyertakan feature list. "
+ #   "Simpan ulang dari training dengan `bundle['feature_columns'] = X_train.columns.tolist()`."
+#)
